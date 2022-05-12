@@ -16,9 +16,9 @@ public class CarController : MonoBehaviour
     [Space]
     [SerializeField] [Range(5, 50f)] private byte angulo_direcao;
     [Space]
-    [SerializeField] [Range(0, 20f)]  private byte ajuda_derecao = 15;
+    [SerializeField] [Range(0, 100f)]  private byte ajuda_derecao = 15;
     [Space]
-    [SerializeField] [Range(0.01f,1f)] private float nao_linearidade_direcao;
+    [SerializeField] [Range(0.01f,1f)] private float angulo_akerman;
     [Space]
     [SerializeField] [Range(0, 50f)] private byte sensibiliade_direcao;
     [Space]
@@ -32,7 +32,7 @@ public class CarController : MonoBehaviour
 
     [Header("Especificacores do Motor")]
     [Space]
-    [SerializeField] private AnimationCurve curva_potencia;
+    [SerializeField] private AnimationCurve curva_torque;
     [Space]
     [SerializeField] private ushort max_torque;
     [SerializeField] private ushort min_torque;
@@ -58,7 +58,7 @@ public class CarController : MonoBehaviour
 
     //**********[Variaveis auxiliares do carro]**********//
     
-    private float rpm;
+    private float rpmMotor;
     float velocidadeDoCarro;
 
     //**********[Variaveis auxiliares da direcao]**********//
@@ -88,6 +88,7 @@ public class CarController : MonoBehaviour
     {
         Direcao();
         ControleDeInputs();
+        Gerenciadoretransmissao(transmissa_automatica);
     }
 
     void FixedUpdate()
@@ -95,19 +96,21 @@ public class CarController : MonoBehaviour
         Movimentar();
         AtualizarAnimRodas();
         freiar();
-        Gerenciadoretransmissao(transmissa_automatica);
         SomDoMotor();
     }
 
     void ControleDeInputs()
     {
-        input_Vertical = Input.GetAxis("Vertical"); ;
+        input_Vertical = Input.GetAxis("Vertical");
+        input_Vertical = Mathf.Clamp(input_Vertical, -1f, 1f);
+
         input_Horizontal = Input.GetAxis("Horizontal");
+        input_Horizontal = Mathf.Clamp(input_Horizontal, -1f, 1f);
     }
 
     void Direcao()
     {
-        float angulo = angulo_direcao / velocidadeDoCarro * ajuda_derecao;
+        float angulo = angulo_direcao / velocidadeDoCarro * Mathf.Abs(-100 + (ajuda_derecao-1));
 
         if(angulo > angulo_direcao)
         {
@@ -118,42 +121,47 @@ public class CarController : MonoBehaviour
 
         if (input_Horizontal > -0.01) //direita
         {
-            //grau_difecao = Mathf.Lerp(grau_difecao, angulo * input_Horizontal, Time.deltaTime * sensibiliade_direcao);
-
-            rodas[0].steerAngle = grau_difecao + (grau_difecao * nao_linearidade_direcao / 4); // esquerda
-            rodas[1].steerAngle = grau_difecao; // direita
-
-            Debug.Log("Esqueda " + rodas[0].steerAngle + "Direita " + rodas[1].steerAngle);
-
+            rodas[0].steerAngle = grau_difecao; // esquerda
+            rodas[1].steerAngle = grau_difecao - ((grau_difecao * angulo_akerman - (grau_difecao)) / 2); // direita
+            Debug.Log("Esquerda: " + rodas[0].steerAngle + "Direita: " + rodas[1].steerAngle);
         }
         else if(input_Horizontal < 0.01)  // esquerda
         {
-            //grau_difecao = Mathf.Lerp(grau_difecao, angulo * input_Horizontal, Time.deltaTime * sensibiliade_direcao);
-
-            rodas[0].steerAngle = grau_difecao; // esquerda
-            rodas[1].steerAngle = grau_difecao + (grau_difecao * nao_linearidade_direcao / 4); // direita
-
-            Debug.Log("Esqueda " + rodas[0].steerAngle + "Direita " + rodas[1].steerAngle);
+            rodas[0].steerAngle = grau_difecao - ((grau_difecao * angulo_akerman - (grau_difecao)) / 2); // esquerda
+            rodas[1].steerAngle = grau_difecao; // direita
+            Debug.Log("Esquerda: " + rodas[0].steerAngle + "Direita: " + rodas[1].steerAngle);
         }
-
     }
 
     void Movimentar()
     {
         velocidadeDoCarro = carro_rigidbody.velocity.magnitude * 3.6f;
+        
+        //teste
+        rpmMotor = relacao_diferencial * relacao_marchas[marcha_atual] * ((rodas[2].rpm + rodas[3].rpm) / 2);
 
-        rpm = (velocidadeDoCarro * 30) * relacao_marchas[marcha_atual] + relacao_diferencial; //teste
-
-        if (rpm < min_Rpm) 
+        if (rpmMotor < min_Rpm) 
         { 
-            rpm = min_Rpm; 
+            rpmMotor = min_Rpm; 
+
+        }
+
+        if(marcha_atual == 0 && velocidadeDoCarro < 20 && input_Vertical > 0.1)
+        {
+            rpmMotor = min_torque_rpm;
         }
         
-        if(input_Vertical > 0 && rpm < max_Rpm)
+        if (input_Vertical > 0 && rpmMotor < max_Rpm - 100)
         {
-            float potencia = curva_potencia.Evaluate(rpm) * input_Vertical;
-            rodas[2].motorTorque = potencia;
-            rodas[3].motorTorque = potencia;
+            //Debug.Log(input_Vertical);
+            float torque = (curva_torque.Evaluate(rpmMotor) * (relacao_marchas[marcha_atual])) * this.input_Vertical;
+             
+            float potenciaReal = (((curva_torque.Evaluate(rpmMotor) * rpmMotor ) * 2) * Mathf.PI) / 60;
+
+            //Debug.Log("Torque: " + (torque * 0.9f).ToString("0000") + " Potencia: " + potenciaReal / 735.499f);
+
+            rodas[2].motorTorque = torque * 0.9f;
+            rodas[3].motorTorque = torque * 0.9f;
         }
         else
         {
@@ -169,26 +177,23 @@ public class CarController : MonoBehaviour
             float intencidadeDoFreio = -forca_freio * input_Vertical;
             rodas[0].brakeTorque = intencidadeDoFreio;
             rodas[1].brakeTorque = intencidadeDoFreio;
-            rodas[2].brakeTorque = intencidadeDoFreio;
-            rodas[3].brakeTorque = intencidadeDoFreio;
+            rodas[2].brakeTorque = intencidadeDoFreio/2;
+            rodas[3].brakeTorque = intencidadeDoFreio/2;
+            return;
         }
-        else
+        
+        if (Input.GetKeyDown(KeyCode.C))
         {
-            rodas[0].brakeTorque = 0;
-            rodas[1].brakeTorque = 0;
-            rodas[2].brakeTorque = 0;
-            rodas[3].brakeTorque = 0;
-        }
-
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-
             rodas[2].brakeTorque = forca_freio * 2;
             rodas[3].brakeTorque = forca_freio * 2;
-
-            rodas[2].motorTorque = 0;
-            rodas[3].motorTorque = 0;
+            Debug.Log("Freio de mao");
+            return;
         }
+
+        rodas[0].brakeTorque = 0;
+        rodas[1].brakeTorque = 0;
+        rodas[2].brakeTorque = 0;
+        rodas[3].brakeTorque = 0;
     }
 
     void SubirMarcha()
@@ -209,14 +214,14 @@ public class CarController : MonoBehaviour
 
     void Gerenciadoretransmissao(bool transmissaoAutomatica)
     {
-        if(rpm >= max_Rpm - 2000 && transmissaoAutomatica || Input.GetKeyDown(KeyCode.UpArrow))
+        if(rpmMotor >= max_Rpm && transmissaoAutomatica || Input.GetKeyDown(KeyCode.UpArrow))
         {
             SubirMarcha();
         }
 
-        float rpmVoltarMarcha = min_Rpm + min_Rpm * 1.5f;
+        float rpmVoltarMarcha = min_Rpm + min_Rpm * 0.2f;
 
-        if(rpm < rpmVoltarMarcha && transmissaoAutomatica || Input.GetKeyDown(KeyCode.DownArrow))
+        if(rpmMotor < rpmVoltarMarcha && transmissaoAutomatica || Input.GetKeyDown(KeyCode.DownArrow))
         {
             DescerMarcha();
         }
@@ -234,7 +239,7 @@ public class CarController : MonoBehaviour
 
     void SomDoMotor()
     {
-        pith = Mathf.Lerp(pith, rpm / 5800, Time.deltaTime * 5);
+        pith = Mathf.Lerp(pith, rpmMotor / 5800, Time.deltaTime * 5);
 
         config_som.pitch = pith;
         if(Input.GetAxis("Vertical") <= 0)
@@ -247,11 +252,10 @@ public class CarController : MonoBehaviour
         }
     }
 
-
     //*****************[Start]*****************//
     void AplicarCurvaPotencia()
     {
-        curva_potencia = new AnimationCurve(new Keyframe(0, 0), new Keyframe(min_torque_rpm, min_torque),
+        curva_torque = new AnimationCurve(new Keyframe(0, 0), new Keyframe(min_torque_rpm, min_torque),
                                                             new Keyframe(max_torque_rpm, max_torque), new Keyframe(max_Rpm, max_torque / 2));
     }
 
@@ -260,7 +264,7 @@ public class CarController : MonoBehaviour
         carro_rigidbody = gameObject.GetComponent<Rigidbody>();
         carro_rigidbody.mass = peso_veiculo;
         carro_rigidbody.centerOfMass = centro_massa;
-        Debug.Log("Centro de massa: " + carro_rigidbody.centerOfMass);
+        //Debug.Log("Centro de massa: " + carro_rigidbody.centerOfMass);
     }
 
     void AplicarEConfigurarSom()
@@ -273,7 +277,7 @@ public class CarController : MonoBehaviour
 
     public float getRPM()
     {
-        return rpm;
+        return rpmMotor;
     }
 
     public float getVelocidadeKM()
@@ -285,14 +289,46 @@ public class CarController : MonoBehaviour
     {
         return marcha_atual;
     }
-
-    public void setinputVerticalMoble(sbyte inputV)
+    // set inputs
+    public void setinputVerticalMoble(float inputV)
     {
         this.input_Vertical = inputV;
     }
 
-    public void setinputHorizontalMoble(sbyte inputH)
+    public void setinputHorizontalMoble(float inputH)
     {
-        this.input_Horizontal = inputH;
+        this.input_Horizontal += inputH;
+    }
+
+    // tunnar carro direcao
+
+    public void setAnguloDirecao(byte angulo)
+    {
+        this.angulo_direcao = angulo;
+    }
+
+    public byte getAnguloDirecao()
+    {
+        return this.angulo_direcao;
+    }
+
+    public void setAnguloAkerman(float porcentagem)
+    {
+        this.angulo_akerman = Mathf.Clamp(porcentagem, 0, 1f);
+    }
+
+    public float getAnguloDeKaterman()
+    {
+        return this.angulo_akerman;
+    }
+
+    public void setAjudaNaDirecao(byte ajudaDirecao)
+    {
+        this.ajuda_derecao = ajudaDirecao;
+    }
+
+    public byte getAjudaNaDirecao()
+    {
+        return this.ajuda_derecao;
     }
 }
